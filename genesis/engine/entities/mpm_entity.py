@@ -50,10 +50,21 @@ class MPMEntity(ParticleEntity):
     """
 
     def __init__(
-        self, scene, solver, material, morph, surface, particle_size, idx, particle_start, vvert_start, vface_start
+        self,
+        scene,
+        solver,
+        material,
+        morph,
+        surface,
+        particle_size,
+        idx,
+        particle_start,
+        vvert_start,
+        vface_start,
     ):
         need_skinning = not isinstance(
-            material, (gs.materials.MPM.Liquid, gs.materials.MPM.Sand, gs.materials.MPM.Snow)
+            material,
+            (gs.materials.MPM.Liquid, gs.materials.MPM.Sand, gs.materials.MPM.Snow),
         )
         super().__init__(
             scene,
@@ -344,20 +355,30 @@ class MPMEntity(ParticleEntity):
         particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx, unsafe=unsafe)
         poss = self._sanitize_particles_tensor((3,), gs.tc_float, poss, particles_idx_local, envs_idx)
         self.solver._kernel_set_particles_pos(
-            self._sim.cur_substep_local, particles_idx_local + self._particle_start, envs_idx, poss
+            self._sim.cur_substep_local,
+            particles_idx_local + self._particle_start,
+            envs_idx,
+            poss,
         )
 
     @gs.assert_built
     def _set_particles_pos_grad(self, poss_grad):
         self.solver._kernel_set_particles_pos_grad(
-            self._sim.cur_substep_local, self._particle_start, self._n_particles, poss_grad
+            self._sim.cur_substep_local,
+            self._particle_start,
+            self._n_particles,
+            poss_grad,
         )
 
     def get_particles_pos(self, envs_idx=None, *, unsafe=False):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
         poss = torch.empty((len(envs_idx), self.n_particles, 3), dtype=gs.tc_float, device=gs.device)
         self.solver._kernel_get_particles_pos(
-            self._sim.cur_substep_local, self._particle_start, self.n_particles, envs_idx, poss
+            self._sim.cur_substep_local,
+            self._particle_start,
+            self.n_particles,
+            envs_idx,
+            poss,
         )
         if self._scene.n_envs == 0:
             poss = poss.squeeze(0)
@@ -369,20 +390,30 @@ class MPMEntity(ParticleEntity):
         particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx, unsafe=unsafe)
         vels = self._sanitize_particles_tensor((3,), gs.tc_float, vels, particles_idx_local, envs_idx)
         self.solver._kernel_set_particles_vel(
-            self._sim.cur_substep_local, particles_idx_local + self._particle_start, envs_idx, vels
+            self._sim.cur_substep_local,
+            particles_idx_local + self._particle_start,
+            envs_idx,
+            vels,
         )
 
     @gs.assert_built
     def _set_particles_vel_grad(self, vels_grad):
         self.solver._kernel_set_particles_vel_grad(
-            self._sim.cur_substep_local, self._particle_start, self._n_particles, vels_grad
+            self._sim.cur_substep_local,
+            self._particle_start,
+            self._n_particles,
+            vels_grad,
         )
 
     def get_particles_vel(self, envs_idx=None, *, unsafe=False):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
         vels = torch.empty((len(envs_idx), self.n_particles, 3), dtype=gs.tc_float, device=gs.device)
         self.solver._kernel_get_particles_vel(
-            self._sim.cur_substep_local, self._particle_start, self.n_particles, envs_idx, vels
+            self._sim.cur_substep_local,
+            self._particle_start,
+            self.n_particles,
+            envs_idx,
+            vels,
         )
         if self._scene.n_envs == 0:
             vels = vels.squeeze(0)
@@ -394,14 +425,21 @@ class MPMEntity(ParticleEntity):
         particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx, unsafe=unsafe)
         actives = self._sanitize_particles_tensor((), gs.tc_bool, actives, particles_idx_local, envs_idx)
         self.solver._kernel_set_particles_active(
-            self._sim.cur_substep_local, particles_idx_local + self._particle_start, envs_idx, actives
+            self._sim.cur_substep_local,
+            particles_idx_local + self._particle_start,
+            envs_idx,
+            actives,
         )
 
     def get_particles_active(self, envs_idx=None, *, unsafe=False):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
         actives = torch.empty((len(envs_idx), self.n_particles), dtype=gs.tc_float, device=gs.device)
         self.solver._kernel_get_particles_active(
-            self._sim.cur_substep_local, self._particle_start, self.n_particles, envs_idx, actives
+            self._sim.cur_substep_local,
+            self._particle_start,
+            self.n_particles,
+            envs_idx,
+            actives,
         )
         if self._scene.n_envs == 0:
             actives = actives.squeeze(0)
@@ -424,7 +462,13 @@ class MPMEntity(ParticleEntity):
         if actus.ndim == 0:
             actus = actus.reshape((1,)).expand((self.material.n_groups,))
         self._set_particles_target_state(
-            "actu", "actuation", (self.material.n_groups,), gs.tc_float, actus, envs_idx, unsafe=True
+            "actu",
+            "actuation",
+            (self.material.n_groups,),
+            gs.tc_float,
+            actus,
+            envs_idx,
+            unsafe=True,
         )
 
     @assert_muscle
@@ -444,7 +488,11 @@ class MPMEntity(ParticleEntity):
         """
         envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
         self.solver._kernel_set_particles_actu(
-            self._sim.cur_substep_local, self.material.n_groups, particles_idx_local, envs_idx, actus
+            self._sim.cur_substep_local,
+            self.material.n_groups,
+            particles_idx_local,
+            envs_idx,
+            actus,
         )
 
     @gs.assert_built
@@ -457,15 +505,24 @@ class MPMEntity(ParticleEntity):
         actu_grad : gs.Tensor
             A tensor containing gradients for actuation inputs.
         """
+
         self.solver._kernel_set_particles_actu_grad(
-            self._sim.cur_substep_local, self._particle_start, self._n_particles, actu_grad
+            self._sim.cur_substep_local,
+            self.material.n_groups,
+            self._particle_start,
+            self._n_particles,
+            actu_grad,
         )
 
     def get_particles_actu(self, envs_idx=None, *, unsafe=False):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
         actus = torch.empty((len(envs_idx), self.n_particles), dtype=gs.tc_float, device=gs.device)
         self.solver._kernel_get_particles_actu(
-            self._sim.cur_substep_local, self._particle_start, self.n_particles, envs_idx, actus
+            self._sim.cur_substep_local,
+            self._particle_start,
+            self.n_particles,
+            envs_idx,
+            actus,
         )
         if self._scene.n_envs == 0:
             actus = actus.squeeze(0)
@@ -497,7 +554,12 @@ class MPMEntity(ParticleEntity):
         muscle_group : gs.Tensor, shape (n_particles,)
             A tensor containing the muscle group ID of each particle.
         """
-        muscle_group = gs.zeros((self._n_particles,), dtype=gs.tc_int, requires_grad=False, scene=self._scene)
+        muscle_group = gs.zeros(
+            (self._n_particles,),
+            dtype=gs.tc_int,
+            requires_grad=False,
+            scene=self._scene,
+        )
         self.solver._kernel_get_particles_muscle_group(self._particle_start, self._n_particles, muscle_group)
         return muscle_group
 
@@ -559,6 +621,11 @@ class MPMEntity(ParticleEntity):
         free : torch.Tensor, shape (n_particles,)
             A tensor indicating free (1) or fixed (0) status.
         """
-        free = gs.zeros((self._n_particles,), dtype=gs.tc_bool, requires_grad=False, scene=self._scene)
+        free = gs.zeros(
+            (self._n_particles,),
+            dtype=gs.tc_bool,
+            requires_grad=False,
+            scene=self._scene,
+        )
         self.solver._kernel_get_particles_free(self._particle_start, self._n_particles, free)
         return free
