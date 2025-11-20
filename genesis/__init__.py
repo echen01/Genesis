@@ -137,17 +137,22 @@ def init(
     use_ndarray, use_fastcache = _use_ndarray, _use_fastcache
 
     # Define the right dtypes in accordance with selected backend and precision
-    global ti_float, np_float, tc_float
+    # Complex numbers are implemented as vec2s in Taichi
+    global ti_float, np_float, tc_float, np_complex, tc_complex
     if precision == "32":
         ti_float = ti.f32
         np_float = np.float32
         tc_float = torch.float32
+        np_complex = np.complex64
+        tc_complex = torch.complex64
     else:  # precision == "64":
         if backend == gs_backend.metal:
             raise_exception("64bits precision is not supported on Apple Metal GPU.")
         ti_float = ti.f64
         np_float = np.float64
         tc_float = torch.float64
+        np_complex = np.complex128
+        tc_complex = torch.complex128
 
     # All int uses 32-bit precision, unless under special circumstances
     global ti_int, np_int, tc_int
