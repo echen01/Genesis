@@ -74,6 +74,8 @@ def from_torch(torch_tensor, dtype=None, requires_grad=False, detach=True, scene
         dtype = gs.tc_int
     elif dtype in (bool, torch.bool):
         dtype = torch.bool
+    elif dtype in (complex, torch.complex64, torch.complex128):
+        dtype = gs.tc_complex
     else:
         gs.raise_exception(f"Unsupported dtype: {dtype}")
 
