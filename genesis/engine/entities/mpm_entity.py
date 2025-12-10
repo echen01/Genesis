@@ -350,25 +350,12 @@ class MPMEntity(ParticleEntity):
     # ------------------------------------------------------------------------------------
 
     @gs.assert_built
-<<<<<<< HEAD
-    def set_particles_pos(self, poss, particles_idx_local=None, envs_idx=None, *, unsafe=False):
-        envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
-        particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx, unsafe=unsafe)
-        poss = self._sanitize_particles_tensor((3,), gs.tc_float, poss, particles_idx_local, envs_idx)
-        self.solver._kernel_set_particles_pos(
-            self._sim.cur_substep_local,
-            particles_idx_local + self._particle_start,
-            envs_idx,
-            poss,
-        )
-=======
     def set_particles_pos(self, poss, particles_idx_local=None, envs_idx=None):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx)
         particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx)
         particles_idx = particles_idx_local + self._particle_start
         poss = self._sanitize_particles_tensor(poss, gs.tc_float, particles_idx, envs_idx, (3,))
         self.solver._kernel_set_particles_pos(self._sim.cur_substep_local, particles_idx, envs_idx, poss)
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
 
     @gs.assert_built
     def _set_particles_pos_grad(self, poss_grad):
@@ -394,25 +381,12 @@ class MPMEntity(ParticleEntity):
         return poss
 
     @gs.assert_built
-<<<<<<< HEAD
-    def set_particles_vel(self, vels, particles_idx_local=None, envs_idx=None, *, unsafe=False):
-        envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
-        particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx, unsafe=unsafe)
-        vels = self._sanitize_particles_tensor((3,), gs.tc_float, vels, particles_idx_local, envs_idx)
-        self.solver._kernel_set_particles_vel(
-            self._sim.cur_substep_local,
-            particles_idx_local + self._particle_start,
-            envs_idx,
-            vels,
-        )
-=======
     def set_particles_vel(self, vels, particles_idx_local=None, envs_idx=None):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx)
         particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx)
         particles_idx = particles_idx_local + self._particle_start
         vels = self._sanitize_particles_tensor(vels, gs.tc_float, particles_idx, envs_idx, (3,))
         self.solver._kernel_set_particles_vel(self._sim.cur_substep_local, particles_idx, envs_idx, vels)
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
 
     @gs.assert_built
     def _set_particles_vel_grad(self, vels_grad):
@@ -438,24 +412,11 @@ class MPMEntity(ParticleEntity):
         return vels
 
     @gs.assert_built
-<<<<<<< HEAD
-    def set_particles_active(self, actives, particles_idx_local=None, envs_idx=None, *, unsafe=False):
-        envs_idx = self._scene._sanitize_envs_idx(envs_idx, unsafe=unsafe)
-        particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx, unsafe=unsafe)
-        actives = self._sanitize_particles_tensor((), gs.tc_bool, actives, particles_idx_local, envs_idx)
-        self.solver._kernel_set_particles_active(
-            self._sim.cur_substep_local,
-            particles_idx_local + self._particle_start,
-            envs_idx,
-            actives,
-        )
-=======
     def set_particles_active(self, actives, particles_idx_local=None, envs_idx=None):
         envs_idx = self._scene._sanitize_envs_idx(envs_idx)
         particles_idx_local = self._sanitize_particles_idx_local(particles_idx_local, envs_idx)
         particles_idx = particles_idx_local + self._particle_start
         actives = self._sanitize_particles_tensor(actives, gs.tc_bool, particles_idx, envs_idx)
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
 
         # FIXME: This check is too expensive
         # if not torch.isin(actives, torch.Tensor([False, True], dtype=gs.tc_bool, device=gs.device)).all():
@@ -492,19 +453,7 @@ class MPMEntity(ParticleEntity):
         actus = to_gs_tensor(actus)
         if actus.ndim == 0:
             actus = actus.reshape((1,)).expand((self.material.n_groups,))
-<<<<<<< HEAD
-        self._set_particles_target_state(
-            "actu",
-            "actuation",
-            (self.material.n_groups,),
-            gs.tc_float,
-            actus,
-            envs_idx,
-            unsafe=True,
-        )
-=======
         self._set_particles_target_state("actu", "actuation", (self.material.n_groups,), gs.tc_float, actus, envs_idx)
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
 
     @assert_muscle
     @gs.assert_built
@@ -526,15 +475,7 @@ class MPMEntity(ParticleEntity):
         particles_idx = particles_idx_local + self._particle_start
         actus = self._sanitize_particles_tensor(actus, gs.tc_float, particles_idx, envs_idx, (self.material.n_groups,))
         self.solver._kernel_set_particles_actu(
-<<<<<<< HEAD
-            self._sim.cur_substep_local,
-            self.material.n_groups,
-            particles_idx_local,
-            envs_idx,
-            actus,
-=======
             self._sim.cur_substep_local, self.material.n_groups, particles_idx, envs_idx, actus
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
         )
 
     @gs.assert_built
@@ -680,15 +621,6 @@ class MPMEntity(ParticleEntity):
         free : torch.Tensor, shape (n_particles,)
             A tensor indicating free (1) or fixed (0) status.
         """
-<<<<<<< HEAD
-        free = gs.zeros(
-            (self._n_particles,),
-            dtype=gs.tc_bool,
-            requires_grad=False,
-            scene=self._scene,
-        )
-=======
         free = self._sanitize_particles_tensor(None, gs.tc_bool)
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
         self.solver._kernel_get_particles_free(self._particle_start, self._n_particles, free)
         return free
