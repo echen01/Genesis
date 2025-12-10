@@ -491,13 +491,8 @@ class ParticleEntity(Entity):
     # ------------------------------------------------------------------------------------
 
     @assert_active
-<<<<<<< HEAD
-    def _set_particles_target_state(self, key, name, element_shape, dtype, tensor, envs_idx=None, *, unsafe=False):
-        if self.sim.requires_grad and self.sim.cur_t > 0.0 and name != "actuation":
-=======
     def _set_particles_target_state(self, key, name, element_shape, dtype, tensor, envs_idx=None):
         if self.sim.requires_grad and self.sim.cur_t > 0.0:
->>>>>>> 8b2e59a93f33b1260a8850ad194616cbd48fdd4f
             gs.logger.warning(
                 f"Manually setting particle '{name}'. This is not recommended because it breaks gradient flow."
             )
