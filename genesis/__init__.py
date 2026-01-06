@@ -5,6 +5,7 @@ import atexit
 import logging as _logging
 import traceback
 import weakref
+from warnings import warn
 from contextlib import redirect_stdout
 
 # Import gstaichi while collecting its output without printing directly
@@ -21,11 +22,6 @@ except ImportError as e:
     raise ImportError(
         "'torch' module not available. Please install pytorch manually: https://pytorch.org/get-started/locally/"
     ) from e
-if tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8):
-    raise ImportError(
-        "'torch<2.8.0' is not supported. Please update pytorch manually: https://pytorch.org/get-started/locally/"
-    )
-
 import numpy as np
 
 from .constants import GS_ARCH, TI_ARCH
@@ -33,6 +29,14 @@ from .constants import backend as gs_backend
 from .logging import Logger
 from .version import __version__
 from .utils import redirect_libc_stderr, set_random_seed, get_platform, get_device
+
+
+_IS_OLD_TORCH = tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
+# FIXME: ti.Field does not support zero-copy on Metal for 'torch<=2.9.1'.
+# See: https://github.com/pytorch/pytorch/pull/168193
+_TORCH_MPS_SUPPORT_DLPACK_FIELD = tuple(map(int, torch.__version__.replace("+", ".").split(".")[:3])) > (2, 9, 1)
+if _IS_OLD_TORCH:
+    warn("'torch<2.8.0' is not supported. Please upgrade pytorch manually: https://pytorch.org/get-started/locally/")
 
 
 # Global state
@@ -138,18 +142,19 @@ def init(
             raise_exception("Genesis previous initialized. GsTaichi fast cache mode cannot be disabled anymore.")
     use_ndarray, use_fastcache = _use_ndarray, _use_fastcache
 
-    # Unlike dynamic vs static array mode, and fastcache, zero-copy can be toggle on/off between init without issue.
-    # FIXME: ti.Field does not support zero-copy on Metal for now because of a bug in Torch itself.
-    # See: https://github.com/pytorch/pytorch/pull/168193
+    # Unlike dynamic vs static array mode, and fastcache, zero-copy can be toggle on/off between init without issue
     _use_zerocopy = int(os.environ["GS_ENABLE_ZEROCOPY"]) if "GS_ENABLE_ZEROCOPY" in os.environ else None
-    if backend in (gs_backend.cpu, gs_backend.cuda):
+    supported_arch = (gs_backend.cpu, gs_backend.cuda)
+    if _TORCH_MPS_SUPPORT_DLPACK_FIELD:
+        supported_arch = (*supported_arch, gs_backend.metal)
+    if backend in supported_arch:
         if _use_zerocopy is None:
             _use_zerocopy = True
     else:
         if _use_zerocopy:
-            raise_exception(f"Zero-copy only support by GsTaichi dynamic array mode on CPU and CUDA backend.")
+            raise_exception(f"Zero-copy not supported on {backend} backend.")
         _use_zerocopy = False
-    use_zerocopy = _use_zerocopy and (_use_ndarray or backend != gs_backend.metal)
+    use_zerocopy = _use_zerocopy and (_TORCH_MPS_SUPPORT_DLPACK_FIELD or backend != gs_backend.metal or _use_ndarray)
 
     # Define the right dtypes in accordance with selected backend and precision
     # Complex numbers are implemented as vec2s in Taichi
@@ -230,11 +235,17 @@ def init(
         torch.backends.cudnn.benchmark = False
         logger.info("Beware running Genesis in debug mode dramatically reduces runtime speed.")
 
-    ti_num_cpu_threads = 1 if debug else os.environ.get("TI_NUM_THREADS")
+    # FIXME: Enforcing Taichi num threads to 1 by default when running on CPU
+    # because it significantly improve performance.
+    ti_num_cpu_threads = os.environ.get("TI_NUM_THREADS")
     if ti_num_cpu_threads is not None:
         taichi_kwargs.update(
             cpu_max_num_threads=int(ti_num_cpu_threads),
             num_compile_threads=int(ti_num_cpu_threads),
+        )
+    else:
+        taichi_kwargs.update(
+            cpu_max_num_threads=1,
         )
 
     if seed is not None:
@@ -303,6 +314,16 @@ def init(
         logger.debug("[GsTaichi] Enabling GsTaichi dynamic array type to avoid scene-specific compilation.")
     if backend == gs_backend.metal:
         logger.debug("[GsTaichi] Beware Apple Metal backend may be unstable.")
+
+    if _IS_OLD_TORCH:
+        logger.warning(
+            "'torch<2.8.0' is not supported. Please upgrade pytorch manually: https://pytorch.org/get-started/locally/"
+        )
+    elif gs.backend == gs.metal and not _TORCH_MPS_SUPPORT_DLPACK_FIELD:
+        logger.warning(
+            "'torch<2.9.1' does not supported zero-copy on Apple Metal. Consider upgrading pytorch to improve "
+            "runtime performance: https://pytorch.org/get-started/locally/"
+        )
 
     msg_options = ", ".join(
         f"{name}: ~~<{val}>~~"

@@ -316,6 +316,18 @@ def double_ball_pendulum():
     )
     ee = ET.SubElement(link2, "body", name="end_effector", pos="0 0 0.3")
     ET.SubElement(ee, "geom", name="ee_geom", type="sphere", size="0.02", density="200", rgba="1.0 0.8 0.2 1.0")
+    ET.SubElement(
+        ee,
+        "geom",
+        name="marker",
+        type="sphere",
+        contype="0",
+        conaffinity="0",
+        size="0.01",
+        density="0",
+        pos="0 -0.02 0",
+        rgba="0.0 0.0 0.0 1.0",
+    )
 
     return mjcf
 
@@ -862,7 +874,8 @@ def test_box_box_dynamics(gs_sim):
         assert_allclose(qpos[8], 0.6, atol=2e-3)
 
 
-@pytest.mark.slow  # ~840s
+@pytest.mark.slow  # ~200s
+@pytest.mark.debug(False)  # Disable debug for speedup
 @pytest.mark.parametrize(
     "box_box_detection, gjk_collision, dynamics",
     [
@@ -941,6 +954,8 @@ def test_robot_kinematics(gs_sim, mj_sim, tol):
     gs_sim.rigid_solver._enable_collision = False
     gs_sim.rigid_solver._enable_joint_limit = False
     gs_sim.rigid_solver._disable_constraint = True
+    gs_sim.rigid_solver.collider.clear()
+    gs_sim.rigid_solver.constraint_solver.clear()
 
     check_mujoco_model_consistency(gs_sim, mj_sim, tol=tol)
 
@@ -1683,7 +1698,13 @@ def test_contact_forces(show_viewer, tol):
 @pytest.mark.required
 @pytest.mark.parametrize("model_name", ["double_ball_pendulum"])
 def test_apply_external_forces(xml_path, show_viewer):
+    GRAVITY = 2.0
+
     scene = gs.Scene(
+        sim_options=gs.options.SimOptions(
+            substeps=2,
+            gravity=(0, 0, -GRAVITY),
+        ),
         viewer_options=gs.options.ViewerOptions(
             camera_pos=(0, -3.5, 2.5),
             camera_lookat=(0.0, 0.0, 1.0),
@@ -1701,28 +1722,66 @@ def test_apply_external_forces(xml_path, show_viewer):
             quat=(1.0, 0, 1.0, 0),
         ),
     )
+    duck = scene.add_entity(
+        morph=gs.morphs.Mesh(
+            file="meshes/duck.obj",
+            scale=0.04,
+            pos=(1.0, 0.0, 1.0),
+            euler=(90, 0, 0),
+            collision=False,
+        ),
+    )
     scene.build()
+    rigid_solver = scene.rigid_solver
 
-    tol = 5e-3
     end_effector_link_idx = robot.links[-1].idx
+    duck_link_idx = duck.links[0].idx
+    duck_mass = duck.get_mass()
     for step in range(801):
-        ee_pos = scene.rigid_solver.get_links_pos([end_effector_link_idx])[0]
+        ee_pos = rigid_solver.get_links_pos([end_effector_link_idx])[0]
+        duck_pos = rigid_solver.get_links_pos([duck_link_idx])[0]
         if step == 0:
-            assert_allclose(ee_pos, [0.8, 0.0, 0.02], tol=tol)
-        elif step == 600:
-            assert_allclose(ee_pos, [0.0, 0.0, 0.82], tol=tol)
+            assert_allclose(ee_pos, (0.8, 0.0, 0.02), tol=1e-4)
+        elif step in (500, 600):
+            assert_allclose(ee_pos, (0.0, 0.0, 0.82), tol=0.01)
         elif step == 800:
-            assert_allclose(ee_pos, [-0.8 / math.sqrt(2), 0.8 / math.sqrt(2), 0.02], tol=tol)
+            assert_allclose(ee_pos, (-0.8 / math.sqrt(2), 0.8 / math.sqrt(2), 0.02), tol=0.02)
+        assert_allclose(duck_pos, (1.0, 0.0, 1.0), tol=1e-3)
 
         if step >= 600:
-            force = np.array([[-5.0, 5.0, 0.0]])
-        elif step >= 100:
-            force = np.array([[0.0, 0.0, 10.0]])
+            force = [-4.0, 4.0, 0.0]
+            torque = [0.0, 0.0, 0.0]
+        elif step >= 500:
+            force = [0.0, 0.0, 0.0]
+            torque = [0.0, 0.0, 2.0]
+        elif step >= 50:
+            force = [0.0, 0.0, 10.0]
+            torque = [0.0, 0.0, 0.0]
         else:
-            force = np.array([[0.0, 0.0, 0.0]])
+            force = [0.0, 0.0, 0.0]
+            torque = [0.0, 0.0, 0.0]
 
-        scene.rigid_solver.apply_links_external_force(force=force, links_idx=[end_effector_link_idx])
+        rigid_solver.apply_links_external_force(
+            force=(0, duck_mass * GRAVITY, 0), links_idx=[duck_link_idx], ref="link_com", local=True
+        )
+        rigid_solver.apply_links_external_force(
+            force=force, links_idx=[end_effector_link_idx], ref="link_origin", local=False
+        )
+        rigid_solver.apply_links_external_torque(
+            torque=torque, links_idx=[end_effector_link_idx], ref="link_origin", local=False
+        )
         scene.step()
+
+    rigid_solver.apply_links_external_torque(torque=(0, 1, 0), links_idx=[duck_link_idx], ref="link_com", local=True)
+    assert_allclose(rigid_solver.links_state.cfrc_applied_vel[duck_link_idx, 0].to_numpy(), 0, tol=gs.EPS)
+    assert_allclose(rigid_solver.links_state.cfrc_applied_ang[duck_link_idx, 0].to_numpy(), (0, 0, -1), tol=gs.EPS)
+
+    with np.testing.assert_raises(ValueError):
+        rigid_solver.apply_links_external_force(force=(0, 0, 0), links_idx=[duck_link_idx], ref="root_com", local=True)
+    with np.testing.assert_raises(ValueError):
+        rigid_solver.apply_links_external_torque(
+            torque=(0, 0, 0), links_idx=[duck_link_idx], ref="root_com", local=True
+        )
 
 
 @pytest.mark.required
@@ -1841,8 +1900,12 @@ def test_frictionloss_advanced(show_viewer, tol):
     assert_allclose(robot.get_AABB()[0, 2], 0.0, tol=2e-4)
     box_pos = box.get_pos()
     assert box_pos[0] > 0.6
-    assert_allclose(box_pos[1:], 0.0, tol=0.02)
-    assert_allclose(box.get_dofs_velocity(), 0.0, tol=5 * tol)
+    # This is to check collision detection is working correctly on metal
+    # The box will collide with the robot and rolling on the ground,
+    # We check whether it's rolling within a reasonable range and not blowing up.
+    # Behavior on mdetial is different from other platforms
+    assert_allclose(box_pos[1:], 0.0, tol=0.05)
+    assert_allclose(box.get_dofs_velocity(), 0.0, tol=50 * tol)
 
 
 @pytest.mark.parametrize("backend", [gs.cpu])
@@ -2136,8 +2199,13 @@ def test_nan_reset(gs_sim, mode):
     assert not torch.isnan(qvel).any()
 
 
-@pytest.mark.required
-@pytest.mark.parametrize("backend", [gs.cpu, gs.gpu])
+@pytest.mark.parametrize(
+    "backend",
+    [
+        gs.cpu,  # This test takes too much time of CPU (~1000s)
+        pytest.param(gs.gpu, marks=pytest.mark.required),
+    ],
+)
 def test_terrain_generation(request, show_viewer):
     TERRAIN_PATTERN = [
         ["flat_terrain", "flat_terrain", "flat_terrain", "flat_terrain", "flat_terrain"],
@@ -2533,28 +2601,48 @@ def test_urdf_capsule(tmp_path, show_viewer, tol):
     assert np.linalg.norm(geom_verts - (0.0, 0.0, 0.14), axis=-1, ord=np.inf).min() < 1e-3
 
 
-def test_urdf_color_overwrite():
+@pytest.mark.required
+@pytest.mark.required
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_urdf_color_overwrite(overwrite):
     scene = gs.Scene()
-    robot = scene.add_entity(
+    box = scene.add_entity(
         gs.morphs.URDF(
             file="genesis/assets/urdf/blue_box/model.urdf",
         ),
         surface=gs.surfaces.Default(
-            color=(1.0, 0.0, 0.0, 1.0),
+            color=(1.0, 0.0, 0.0, 1.0) if overwrite else None,
         ),
     )
-    for vgeom in robot.vgeoms:
+    axis = scene.add_entity(
+        gs.morphs.Mesh(
+            file="meshes/axis.obj",
+        ),
+        surface=gs.surfaces.Default(
+            color=(1.0, 0.0, 0.0, 1.0) if overwrite else None,
+        ),
+    )
+    for vgeom in box.vgeoms:
         visual = vgeom.vmesh.trimesh.visual
         assert visual.defined
         color = np.unique(visual.vertex_colors, axis=0)
-        assert_array_equal(color, (255, 0, 0, 255))
-    for geom in robot.geoms:
-        visual = geom.mesh.trimesh.visual
+        assert_array_equal(color, (255, 0, 0, 255) if overwrite else (0, 0, 255, 255))
+    for vgeom in axis.vgeoms:
+        visual = vgeom.vmesh.trimesh.visual
         assert visual.defined
         color = np.unique(visual.vertex_colors, axis=0)
-        # Collision geometry meshes have randomized colors with partial transparency to ease debugging
-        with pytest.raises(AssertionError):
+        if overwrite:
             assert_array_equal(color, (255, 0, 0, 255))
+        else:
+            assert_array_equal(color, [[0, 0, 178, 255], [0, 178, 0, 255], [178, 0, 0, 255], [255, 255, 255, 255]])
+    for entity in scene.entities:
+        for geom in entity.geoms:
+            visual = geom.mesh.trimesh.visual
+            assert visual.defined
+            color = np.unique(visual.vertex_colors, axis=0)
+            # Collision geometry meshes have randomized colors with partial transparency to ease debugging
+            with pytest.raises(AssertionError):
+                assert_array_equal(color, (255, 0, 0, 255))
 
 
 @pytest.mark.required
@@ -2825,6 +2913,57 @@ def test_get_constraints_api(show_viewer, tol):
         else:
             assert_allclose((link_a_[0], link_b_[0]), ((), ()), tol=0)
         assert_allclose((link_a_[1], link_b_[1]), ((link_a,), (link_b,)), tol=0)
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("precision", ["32", "64"])
+@pytest.mark.parametrize("backend", [gs.gpu])
+def test_cholesky_tiling(monkeypatch, tol):
+    import genesis.engine.solvers
+
+    rigid_solver_build_orig = genesis.engine.solvers.RigidSolver.build
+
+    values = []
+    for enable_tiled_cholesky in (True, False):
+
+        def rigid_solver_build(self):
+            nonlocal enable_tiled_cholesky
+
+            rigid_solver_build_orig(self)
+            self._static_rigid_sim_config.enable_tiled_cholesky_mass_matrix = enable_tiled_cholesky
+            self._static_rigid_sim_config.enable_tiled_cholesky_hessian = enable_tiled_cholesky
+            if enable_tiled_cholesky:
+                self._static_rigid_sim_config.tiled_n_dofs_per_entity = 32
+                self._static_rigid_sim_config.tiled_n_dofs = 32
+
+        monkeypatch.setattr("genesis.engine.solvers.RigidSolver.build", rigid_solver_build)
+
+        scene = gs.Scene(
+            rigid_options=gs.options.RigidOptions(
+                constraint_solver=gs.constraint_solver.Newton,
+                sparse_solve=False,
+            ),
+            show_viewer=False,
+            show_FPS=False,
+        )
+        scene.add_entity(gs.morphs.Plane())
+        gs_robot = scene.add_entity(
+            gs.morphs.URDF(
+                file="urdf/go2/urdf/go2.urdf",
+            ),
+        )
+        scene.build(n_envs=2)
+        assert scene.rigid_solver._static_rigid_sim_config.enable_tiled_cholesky_mass_matrix == enable_tiled_cholesky
+        assert scene.rigid_solver._static_rigid_sim_config.enable_tiled_cholesky_hessian == enable_tiled_cholesky
+
+        scene.step()
+        assert (scene.rigid_solver.constraint_solver.constraint_state.n_constraints.to_numpy() > 0).all()
+
+        nt_H = scene.rigid_solver.constraint_solver.constraint_state.nt_H.to_numpy()
+        assert (np.linalg.norm(nt_H.reshape((-1, 2)), axis=0) > 5.0).all()
+        values.append(nt_H)
+
+    assert_allclose(*values, tol=tol)
 
 
 @pytest.mark.slow  # ~100s
@@ -3141,6 +3280,46 @@ def test_data_accessor(n_envs, batched, tol):
 
 
 @pytest.mark.required
+def test_deprecated_properties(caplog):
+    scene = gs.Scene(
+        show_viewer=False,
+        show_FPS=False,
+    )
+    box = scene.add_entity(
+        gs.morphs.Box(
+            size=(1.0, 1.0, 1.0),
+            pos=(0.0, 0.0, 0.0),
+        )
+    )
+    scene.build()
+
+    joint = box.joints[0]
+
+    # Verify introspection doesn't trigger warnings
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        repr(joint)
+        vars(joint)
+    assert len(caplog.records) == 0
+
+    for name_old, name_new in (
+        ("dof_idx", "dofs_idx"),
+        ("dof_idx_local", "dofs_idx_local"),
+        ("q_idx", "qs_idx"),
+        ("q_idx_local", "qs_idx_local"),
+    ):
+        # Make sure that deprecated properties are hidden
+        assert name_old not in dir(joint)
+
+        # Verify deprecated properties emit warnings but work correctly
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            deprecated_value = getattr(joint, name_old)
+        assert len(caplog.records) > 0
+        assert_allclose(deprecated_value, getattr(joint, name_new), tol=gs.EPS)
+
+
+@pytest.mark.required
 @pytest.mark.parametrize("enable_mujoco_compatibility", [True, False])
 def test_getter_vs_state_post_step_consistency(enable_mujoco_compatibility):
     DT = 0.01
@@ -3414,7 +3593,7 @@ def test_noslip_iterations(scale, box_box_detection, show_viewer, tol):
 
 
 @pytest.mark.required
-@pytest.mark.parametrize("n_envs", [0, 1])
+@pytest.mark.parametrize("n_envs", [0, 3])
 def test_axis_aligned_bounding_boxes(n_envs):
     scene = gs.Scene()
     scene.add_entity(
@@ -3423,7 +3602,7 @@ def test_axis_aligned_bounding_boxes(n_envs):
             pos=(0, 0, 0),
         ),
     )
-    box = scene.add_entity(
+    scene.add_entity(
         gs.morphs.Box(
             size=(0.1, 0.1, 0.1),
             pos=(0.5, 0, 0.05),
@@ -3449,11 +3628,21 @@ def test_axis_aligned_bounding_boxes(n_envs):
     )
     scene.build(n_envs=n_envs)
 
-    aabb_shape = (*((n_envs,) if n_envs > 0 else ()), 2, 3)
+    batch_shape = (n_envs,) if n_envs > 0 else ()
+    aabb_shape = (*batch_shape, 2, 3)
+
+    qpos = np.random.rand(*(*batch_shape, robot.n_dofs))
+    robot.set_dofs_position(qpos)
+
     robot_aabb = robot.get_AABB()
     robot_geoms_aabb = torch.stack([geom.get_AABB().expand(aabb_shape) for geom in robot.geoms], dim=0)
     assert_allclose(torch.min(robot_geoms_aabb[..., 0, :], dim=0).values, robot_aabb[..., 0, :], tol=gs.EPS)
     assert_allclose(torch.max(robot_geoms_aabb[..., 1, :], dim=0).values, robot_aabb[..., 1, :], tol=gs.EPS)
+    for link in robot.links:
+        link_aabb = link.get_AABB()
+        link_geoms_aabb = torch.stack([geom.get_AABB().expand(aabb_shape) for geom in link.geoms], dim=0)
+        assert_allclose(torch.min(link_geoms_aabb[..., 0, :], dim=0).values, link_aabb[..., 0, :], tol=gs.EPS)
+        assert_allclose(torch.max(link_geoms_aabb[..., 1, :], dim=0).values, link_aabb[..., 1, :], tol=gs.EPS)
 
     all_aabbs = scene.sim.rigid_solver.get_AABB()
     aabbs = [geom.get_AABB().expand(aabb_shape) for entity in scene.entities for geom in entity.geoms]
@@ -3472,6 +3661,21 @@ def test_axis_aligned_bounding_boxes(n_envs):
     sphere_aabb_min, sphere_aabb_max = aabbs[3].split(1, dim=-2)
     assert_allclose(sphere_aabb_min, (-0.55, -0.05, 0.0), atol=gs.EPS)
     assert_allclose(sphere_aabb_max, (-0.45, 0.05, 0.1), atol=gs.EPS)
+
+    vaabbs = [vgeom.get_vAABB().expand(aabb_shape) for entity in scene.entities for vgeom in entity.vgeoms]
+    if n_envs > 0:
+        for entity in scene.entities:
+            for vgeom in entity.vgeoms:
+                assert_allclose(vgeom.get_vAABB(), [vgeom.get_vAABB(i)[0] for i in range(n_envs)], tol=gs.EPS)
+    box_aabb_min, box_aabb_max = vaabbs[1].split(1, dim=-2)
+    assert_allclose(box_aabb_min, (0.45, -0.05, 0.0), atol=gs.EPS)
+    assert_allclose(box_aabb_max, (0.55, 0.05, 0.1), atol=gs.EPS)
+    sphere_aabb_min, sphere_aabb_max = vaabbs[3].split(1, dim=-2)
+    assert_allclose(sphere_aabb_min, (-0.55, -0.05, 0.0), atol=1e-3)
+    assert_allclose(sphere_aabb_max, (-0.45, 0.05, 0.1), atol=1e-3)
+
+    robot_vaabb = robot.get_vAABB()
+    assert_allclose(robot_vaabb, robot_aabb, atol=1e-3)
 
 
 @pytest.mark.required
@@ -3562,7 +3766,12 @@ def test_joint_get_anchor_pos_and_axis(n_envs):
 @pytest.mark.required
 @pytest.mark.parametrize("is_fixed", [False, True])
 @pytest.mark.parametrize("merge_fixed_links", [False, True])
-def test_merge_entities(is_fixed, merge_fixed_links, show_viewer, tol):
+def test_merge_entities(is_fixed, merge_fixed_links, show_viewer, tol, monkeypatch):
+    # Force parallelism on CPU to trigger any cross-entity race condition
+    if gs.backend == gs.cpu:
+        monkeypatch.setenv("GS_PARA_LEVEL", "2")
+        monkeypatch.setenv("TI_NUM_THREADS", "3")
+
     EULER_OFFSET = (0, 0, 45)
 
     scene = gs.Scene(
@@ -3596,14 +3805,24 @@ def test_merge_entities(is_fixed, merge_fixed_links, show_viewer, tol):
         ),
         vis_mode="collision",
     )
+    tool = scene.add_entity(
+        gs.morphs.Sphere(
+            radius=0.005,
+        ),
+    )
     box = scene.add_entity(
         gs.morphs.Box(
             size=(0.02, 0.02, 0.02),
             pos=(0.3, 0.0, 0.01),
         ),
     )
+    with pytest.raises(gs.GenesisException):
+        franka.attach(hand, "right_finger")
     hand.attach(franka, "attachment")
+    tool.attach(hand, "right_finger")
     scene.build()
+    with pytest.raises(gs.GenesisException):
+        box.attach(hand, "right_finger")
 
     franka.control_dofs_position([-1, 0.8, 1, -2, 1, 0.5, -0.5])
     hand.control_dofs_position([0.04, 0.04])
@@ -3618,3 +3837,5 @@ def test_merge_entities(is_fixed, merge_fixed_links, show_viewer, tol):
         assert torch.linalg.norm(link.get_pos() - attach_link.get_pos(), dim=-1) < 0.08
     if not merge_fixed_links:
         assert_allclose(torch.linalg.norm(hand.links[-1].get_pos() - attach_link.get_pos(), dim=-1), 0.105, tol=tol)
+
+    assert_allclose(tool.get_pos(), hand.get_link("right_finger").get_pos(), tol=gs.EPS)

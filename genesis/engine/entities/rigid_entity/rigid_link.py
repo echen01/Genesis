@@ -7,10 +7,11 @@ import trimesh
 import genesis as gs
 from genesis.repr_base import RBC
 from genesis.utils import geom as gu
+from genesis.utils.urdf import compose_inertial_properties, rotate_inertia
 
-from genesis.utils.misc import DeprecationError, tensor_to_array
+from genesis.utils.misc import tensor_to_array, ti_to_torch, DeprecationError
 
-from .rigid_geom import RigidGeom, RigidVisGeom, _kernel_get_free_verts, _kernel_get_fixed_verts
+from .rigid_geom import RigidGeom, RigidVisGeom
 
 if TYPE_CHECKING:
     from .rigid_entity import RigidEntity
@@ -121,82 +122,75 @@ class RigidLink(RBC):
         for vgeom in self._vgeoms:
             vgeom._build()
 
-        self._init_mesh = self._compose_init_mesh()
+        if self._inertial_mass is None or self._inertial_pos is None or self._inertial_i is None:
+            # FIXME: Setting zero mass even for fixed links breaks physics for some reason...
+            # For non-fixed links, it must be non-zero in case for coupling with deformable body solvers.
+            total_mass = gs.EPS
+            total_com = np.zeros(3, dtype=gs.np_float)
+            total_inertia = np.zeros((3, 3), dtype=gs.np_float)
 
-        # inertial_mass and inertia_i
-        if self._inertial_mass is None:
-            if len(self._geoms) == 0 and len(self._vgeoms) == 0:
-                self._inertial_mass = 0.0
-            else:
-                if self._init_mesh.is_watertight:
-                    self._inertial_mass = self._init_mesh.volume * self.entity.material.rho
-                else:  # TODO: handle non-watertight mesh
-                    self._inertial_mass = 1.0
+            if not self._is_fixed and not self._geoms and not self._vgeoms:
+                gs.logger.info(
+                    f"Link mass is not specified and no geoms found for link '{self.name}'. Mass is set to 'gs.EPS'."
+                )
+
+            elif not self._is_fixed:
+                # Determine which geom list to use: geoms first, then vgeoms, then fallback
+                if self._geoms:
+                    is_visual = False
+                    geom_list = self._geoms
+                else:
+                    gs.logger.info(
+                        f"Link mass is not specified and collision geoms can not be found for link '{self.name}'. "
+                        f"Using visual geoms to compute inertial properties."
+                    )
+                    is_visual = True
+                    geom_list = self._vgeoms
+
+                # Process each geom individually and compose their properties
+                for geom in geom_list:
+                    # Create mesh based on geom type
+                    if is_visual:
+                        inertia_mesh = trimesh.Trimesh(geom.init_vverts, geom.init_vfaces)
+                    else:
+                        inertia_mesh = trimesh.Trimesh(geom.init_verts, geom.init_faces)
+
+                    geom_pos = geom._init_pos
+                    geom_quat = geom._init_quat
+
+                    if not inertia_mesh.is_watertight:
+                        inertia_mesh = trimesh.convex.convex_hull(inertia_mesh)
+
+                    # FIXME: without this check, some geom will have negative volume even after the above convex
+                    # hull operation, e.g. 'tests/test_examples.py::test_example[rigid/terrain_from_mesh.py-None]'
+                    if inertia_mesh.volume < -gs.EPS:
+                        inertia_mesh.invert()
+
+                    geom_mass = inertia_mesh.volume * self.entity.material.rho
+                    geom_com_local = np.array(inertia_mesh.center_mass, dtype=gs.np_float)
+
+                    geom_inertia_local = inertia_mesh.moment_inertia / inertia_mesh.mass * geom_mass
+
+                    # Transform geom properties to link frame
+                    geom_com_link = gu.transform_by_quat(geom_com_local, geom_quat) + geom_pos
+                    geom_inertia_link = rotate_inertia(geom_inertia_local, gu.quat_to_R(geom_quat))
+
+                    # Compose with existing properties
+                    total_mass, total_com, total_inertia = compose_inertial_properties(
+                        total_mass, total_com, total_inertia, geom_mass, geom_com_link, geom_inertia_link
+                    )
+
+            self._inertial_mass = total_mass
+            self._inertial_pos = total_com
+            self._inertial_i = total_inertia
 
         # Postpone computation of inverse weight if not specified
         if self._invweight is None:
             self._invweight = np.full((2,), fill_value=-1.0, dtype=gs.np_float)
 
-        # inertial_pos
-        if self._inertial_pos is None:
-            if self._init_mesh is None:
-                self._inertial_pos = gu.zero_pos()
-            else:
-                self._inertial_pos = np.array(self._init_mesh.center_mass, dtype=gs.np_float)
-
-        # inertial_i
-        if self._inertial_i is None:
-            # FIXME: Why coef 0.4 ???
-            if self._init_mesh is None:  # use sphere inertia with radius 0.1
-                self._inertial_i = 0.4 * self._inertial_mass * 0.1**2 * np.eye(3)
-
-            else:
-                # attempt to fix non-watertight mesh by convexifying
-                inertia_mesh = self._init_mesh.copy()
-                if not inertia_mesh.is_watertight:
-                    inertia_mesh = trimesh.convex.convex_hull(inertia_mesh)
-
-                if inertia_mesh.is_watertight and self._init_mesh.mass > 0:
-                    # TODO: check if this is correct. This is correct if the inertia frame is w.r.t to link frame
-                    T_inertia = gu.trans_quat_to_T(self._inertial_pos, self._inertial_quat)
-                    self._inertial_i = (
-                        self._init_mesh.moment_inertia_frame(T_inertia) / self._init_mesh.mass * self._inertial_mass
-                    )
-
-                else:  # approximate with a sphere
-                    self._inertial_i = (
-                        0.4
-                        * self._inertial_mass
-                        * (max(self._init_mesh.bounds[1] - self._init_mesh.bounds[0]) / 2.0) ** 2
-                        * np.eye(3)
-                    )
-
-        self._inertial_i = np.asarray(self._inertial_i, dtype=gs.np_float)
-
         # override invweight if fixed
         if self._is_fixed:
             self._invweight = np.zeros((2,), dtype=gs.np_float)
-
-    def _compose_init_mesh(self):
-        if len(self._geoms) == 0 and len(self._vgeoms) == 0:
-            return None
-        else:
-            init_verts = []
-            init_faces = []
-            vert_offset = 0
-            if len(self._geoms) > 0:
-                for geom in self._geoms:
-                    init_verts.append(gu.transform_by_trans_quat(geom.init_verts, geom.init_pos, geom.init_quat))
-                    init_faces.append(geom.init_faces + vert_offset)
-                    vert_offset += geom.init_verts.shape[0]
-            elif len(self._vgeoms) > 0:  # use vgeom if there's no geom
-                for vgeom in self._vgeoms:
-                    init_verts.append(gu.transform_by_trans_quat(vgeom.init_vverts, vgeom.init_pos, vgeom.init_quat))
-                    init_faces.append(vgeom.init_vfaces + vert_offset)
-                    vert_offset += vgeom.init_vverts.shape[0]
-            init_verts = np.concatenate(init_verts)
-            init_faces = np.concatenate(init_faces)
-            return trimesh.Trimesh(init_verts, init_faces)
 
     def _add_geom(
         self,
@@ -303,14 +297,14 @@ class RigidLink(RBC):
         """
         Get the vertices of the link's collision body (concatenation of all `link.geoms`) in the world frame.
         """
-        self._solver.update_verts_for_geoms(slice(self.geom_start, self.geom_end))
+        geoms_idx = slice(self.geom_start, self.geom_end)
+        self._solver.update_verts_for_geoms(geoms_idx)
 
+        verts_idx = slice(self._verts_state_start, self._verts_state_start + self.n_verts)
         if self.is_fixed and not self._entity._batch_fixed_verts:
-            tensor = torch.empty((self.n_verts, 3), dtype=gs.tc_float, device=gs.device)
-            _kernel_get_fixed_verts(tensor, self._verts_state_start, self.n_verts, self._solver.fixed_verts_state)
+            tensor = ti_to_torch(self._solver.fixed_verts_state.pos, verts_idx, copy=True)
         else:
-            tensor = torch.empty((self._solver._B, self.n_verts, 3), dtype=gs.tc_float, device=gs.device)
-            _kernel_get_free_verts(tensor, self._verts_state_start, self.n_verts, self._solver.free_verts_state)
+            tensor = ti_to_torch(self._solver.free_verts_state.pos, None, verts_idx, transpose=True, copy=True)
             if self._solver.n_envs == 0:
                 tensor = tensor[0]
         return tensor
@@ -321,8 +315,21 @@ class RigidLink(RBC):
         Get the axis-aligned bounding box (AABB) of the link's collision body in the world frame by aggregating all
         the collision geometries associated with this link (`link.geoms`).
         """
+        if self.n_geoms == 0:
+            gs.raise_exception("Link has no collision geometries.")
         verts = self.get_verts()
-        return torch.stack((verts.min(axis=-2).values, verts.max(axis=-2).values), axis=-2)
+        return torch.stack((verts.min(dim=-2).values, verts.max(dim=-2).values), dim=-2)
+
+    @gs.assert_built
+    def get_vAABB(self, envs_idx=None):
+        """
+        Get the axis-aligned bounding box (AABB) of the link's visual body in the world frame by aggregating all
+        the visual geometries associated with this link (`link.vgeoms`).
+        """
+        if self.n_geoms == 0:
+            gs.raise_exception("Link has no visual geometries.")
+        aabbs = torch.stack([vgeom.get_vAABB(envs_idx) for vgeom in self._vgeoms], dim=-3)
+        return torch.stack((aabbs[..., 0, :].min(dim=-2).values, aabbs[..., 1, :].max(dim=-2).values), dim=-2)
 
     @gs.assert_built
     def set_mass(self, mass):

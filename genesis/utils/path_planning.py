@@ -428,8 +428,9 @@ class RRT(PathPlanner):
                         entities_info,
                         rigid_global_info,
                         self._solver._static_rigid_sim_config,
+                        is_backward=False,
                     )
-                    gs.engine.solvers.rigid.rigid_solver_decomp.func_update_geoms(
+                    gs.engine.solvers.rigid.rigid_solver_decomp.func_update_geoms_batch(
                         i_b,
                         entities_info,
                         geoms_info,
@@ -438,6 +439,7 @@ class RRT(PathPlanner):
                         rigid_global_info,
                         self._solver._static_rigid_sim_config,
                         force_update_fixed_geoms=False,
+                        is_backward=False,
                     )
 
     @ti.kernel
@@ -795,8 +797,9 @@ class RRTConnect(PathPlanner):
                         entities_info,
                         rigid_global_info,
                         self._solver._static_rigid_sim_config,
+                        is_backward=False,
                     )
-                    gs.engine.solvers.rigid.rigid_solver_decomp.func_update_geoms(
+                    gs.engine.solvers.rigid.rigid_solver_decomp.func_update_geoms_batch(
                         i_b,
                         entities_info,
                         geoms_info,
@@ -805,6 +808,7 @@ class RRTConnect(PathPlanner):
                         rigid_global_info,
                         self._solver._static_rigid_sim_config,
                         force_update_fixed_geoms=False,
+                        is_backward=False,
                     )
 
     @ti.kernel

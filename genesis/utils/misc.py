@@ -9,10 +9,7 @@ import os
 import platform
 import random
 import sys
-import types
-import weakref
-from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import field
 from itertools import combinations
 from typing import Any, Callable, NoReturn, Optional, Type, Sequence
 
@@ -23,17 +20,19 @@ import psutil
 import pyglet
 import torch
 
-from gstaichi.lang.util import is_ti_template, to_pytorch_type, to_numpy_type
+from gstaichi.lang.util import to_pytorch_type, to_numpy_type
 from gstaichi._kernels import tensor_to_ext_arr, matrix_to_ext_arr, ndarray_to_ext_arr, ndarray_matrix_to_ext_arr
-from gstaichi.lang import impl
-from gstaichi.lang.exception import handle_exception_from_cpp
-from gstaichi.types import primitive_types
 
 import genesis as gs
 from genesis.constants import backend as gs_backend
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+# FIXME: ti.Field does not support zero-copy on Metal for 'torch<=2.9.1'.
+# See: https://github.com/pytorch/pytorch/pull/168193
+TORCH_MPS_SUPPORT_DLPACK_FIELD = tuple(map(int, torch.__version__.replace("+", ".").split(".")[:3])) > (2, 9, 1)
 
 
 class DeprecationError(Exception):
@@ -410,125 +409,17 @@ def has_display() -> bool:
 
 # -------------------------------------- TAICHI SPECIALIZATION --------------------------------------
 
-TI_PROG_WEAKREF: weakref.ReferenceType | None = None
-TI_MAPPING_KEY_CACHE: OrderedDict[int, Any] = OrderedDict()
-MAX_CACHE_SIZE = 1000
-
-
-def _ensure_compiled(self, *args):
-    # Note that the field is enough to determine the key because all the other arguments depends on it.
-    # This may not be the case anymore if the output is no longer dynamically allocated at some point.
-    cache_id = id(args[0])
-    key = TI_MAPPING_KEY_CACHE.get(cache_id)
-    if key is None:
-        extracted = []
-        for arg, kernel_arg in zip(args, self.mapper.arguments):
-            anno = kernel_arg.annotation
-            if is_ti_template(anno):
-                subkey = arg
-            else:  # isinstance(annotation, (ti.types.ndarray_type.NdarrayType, torch.Tensor, np.ndarray))
-                needs_grad = getattr(arg, "requires_grad", False) if anno.needs_grad is None else anno.needs_grad
-                subkey = (arg.dtype, len(arg.shape), needs_grad, anno.boundary)
-            extracted.append(subkey)
-        key = tuple(extracted)
-        TI_MAPPING_KEY_CACHE[cache_id] = key
-    instance_id = self.mapper.mapping.get(key)
-    if instance_id is None:
-        key = ti.lang.kernel_impl.Kernel.ensure_compiled(self, *args)
-    else:
-        key = (self.func, instance_id, self.autodiff_mode)
-    return key
-
-
-def _launch_kernel(self, t_kernel, compiled_kernel_data, *args):
-    launch_ctx = t_kernel.make_launch_context()
-
-    template_num = 0
-    for i, v in enumerate(args):
-        needed = self.arg_metas[i].annotation
-
-        # template
-        if is_ti_template(needed):
-            template_num += 1
-            continue
-
-        # ti.ndarray
-        if isinstance(v, ti.Ndarray):
-            v_primal = v.arr
-            v_grad = v.grad.arr if v.grad else None
-            if v_grad is None:
-                launch_ctx.set_arg_ndarray(i - template_num, v_primal)
-            else:
-                launch_ctx.set_arg_ndarray_with_grad(i - template_num, v_primal, v_grad)
-            continue
-
-        # ti.field
-        array_shape = v.shape
-        if needed.dtype is None or id(needed.dtype) in primitive_types.type_ids:
-            element_dim = 0
-        else:
-            is_soa = needed.layout == ti.Layout.SOA
-            element_dim = needed.dtype.ndim
-            array_shape = v.shape[element_dim:] if is_soa else v.shape[:-element_dim]
-
-        if isinstance(v, np.ndarray):  # numpy
-            arr_ptr = int(v.ctypes.data)
-            nbytes = v.nbytes
-            grad_ptr = 0  # nullptr
-        else:  # torch
-            if v.requires_grad and v.grad is None:
-                v.grad = torch.zeros_like(v)
-            if v.requires_grad:
-                if not isinstance(v.grad, torch.Tensor):
-                    raise ValueError(
-                        f"Expecting torch.Tensor for gradient tensor, but getting {v.grad.__class__.__name__} instead"
-                    )
-                if not v.grad.is_contiguous():
-                    raise ValueError(
-                        "Non contiguous gradient tensors are not supported, please call tensor.grad.contiguous() "
-                        "before passing it into taichi kernel."
-                    )
-
-            arr_ptr = int(v.data_ptr())
-            nbytes = v.element_size() * v.nelement()
-            grad_ptr = int(v.grad.data_ptr()) if v.grad is not None else 0
-
-        launch_ctx.set_arg_external_array_with_shape(i - template_num, arr_ptr, nbytes, array_shape, grad_ptr)
-
-    try:
-        prog = impl.get_runtime().prog
-        if compiled_kernel_data is None:
-            compile_result = prog.compile_kernel(prog.config(), prog.get_device_caps(), t_kernel)
-            compiled_kernel_data = compile_result.compiled_kernel_data
-        prog.launch_kernel(compiled_kernel_data, launch_ctx)
-    except Exception as e:
-        e = handle_exception_from_cpp(e)
-        if impl.get_runtime().print_full_traceback:
-            raise e
-        raise e from None
-
-
-def _destroy_callback(ref: weakref.ReferenceType):
-    global TI_PROG_WEAKREF
-    TI_MAPPING_KEY_CACHE.clear()
-    for kernel in TO_EXT_ARR_FAST_MAP.values():
-        kernel._primal.mapper.mapping.clear()
-    TI_PROG_WEAKREF = None
-
-
 _to_torch_type_fast = functools.lru_cache(maxsize=None)(to_pytorch_type)
 _to_numpy_type_fast = functools.lru_cache(maxsize=None)(to_numpy_type)
-TO_EXT_ARR_FAST_MAP = {}
-for data_type, func in (
-    (ti.ScalarField, tensor_to_ext_arr),
-    (ti.MatrixField, matrix_to_ext_arr),
-    (ti.ScalarNdarray, ndarray_to_ext_arr),
-    (ti.MatrixNdarray, ndarray_matrix_to_ext_arr),
-):
-    func = ti.kernel(func._primal.func)
-    func._primal.launch_kernel = types.MethodType(_launch_kernel, func._primal)
-    func._primal.ensure_compiled = types.MethodType(_ensure_compiled, func._primal)
-    TO_EXT_ARR_FAST_MAP[data_type] = func
+
+TO_EXT_ARR_FAST_MAP = dict(
+    (
+        (ti.ScalarField, tensor_to_ext_arr),
+        (ti.MatrixField, matrix_to_ext_arr),
+        (ti.ScalarNdarray, ndarray_to_ext_arr),
+        (ti.MatrixNdarray, ndarray_matrix_to_ext_arr),
+    )
+)
 
 
 def ti_to_python(
@@ -546,11 +437,22 @@ def ti_to_python(
         without raising an exception if not.
         to_torch (bool): Whether to convert to Torch tensor or Numpy array. Defaults to True.
     """
+    # Get batch size if possible
+    try:
+        batch_shape = value.shape
+    except AttributeError:
+        if isinstance(value, ti.Matrix):
+            raise ValueError("Tensor of type 'ti.Vector', 'ti.Matrix' not supported.")
+        raise
+
     # Check if copy mode is supported while setting default mode if not specified.
-    # FIXME: ti.Field does not support zero-copy on Metal for now because of a bug in Torch itself.
-    # See: https://github.com/pytorch/pytorch/pull/168193
+    # FIXME: Torch>2.9.1 still does not support bytes_offset for 0-dim dlpack.
     data_type = type(value)
-    use_zerocopy = gs.use_zerocopy and (gs.backend != gs.metal or not issubclass(data_type, ti.Field))
+    is_field = issubclass(data_type, ti.Field)
+    use_zerocopy = gs.use_zerocopy and (
+        (TORCH_MPS_SUPPORT_DLPACK_FIELD or gs.backend != gs.metal or not is_field)
+        and (batch_shape or not issubclass(data_type, ti.ScalarField))
+    )
     if not use_zerocopy or (not to_torch and gs.backend != gs.cpu):
         if copy is False:
             gs.raise_exception(
@@ -562,7 +464,6 @@ def ti_to_python(
         copy = False
 
     # Leverage zero-copy if enabled
-    batch_shape = value.shape
     if use_zerocopy:
         while True:
             try:
@@ -572,9 +473,8 @@ def ti_to_python(
                     out = value._T_np if transpose else value._np
                 break
             except AttributeError:
-                # FIXME: Field data is not properly initialized (not materialized) in memory at this point.
-                # DLPack will return garbage at best, or segfault right away if `ti.sync` is not called beforehand.
-                if issubclass(data_type, ti.Field):
+                # FIXME: DLPack still returns garbage data on Apple Metal for field if not calling sync first
+                if is_field and gs.backend == gs.metal:
                     ti.sync()
 
                 # "Cache" no-owning python-side views of the original GsTaichi memory buffer as a hidden attribute
@@ -594,11 +494,6 @@ def ti_to_python(
             else:
                 out = out.copy()
         return out
-
-    # Keep track of taichi runtime to automatically clear cache if destroyed
-    global TI_PROG_WEAKREF
-    if TI_PROG_WEAKREF is None:
-        TI_PROG_WEAKREF = weakref.ref(impl.get_runtime().prog, _destroy_callback)
 
     # Extract value as a whole.
     # Note that this is usually much faster than using a custom kernel to extract a slice.
