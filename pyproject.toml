@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genesis-world"
-version = "0.3.11"
+version = "0.3.12"
 description = "A universal and generative physics engine"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
@@ -14,7 +14,6 @@ dependencies = [
     "pydantic>=2.11.0",
     "numpy>=1.26.4",
     "trimesh",
-    "scipy>=1.14",
     "libigl",
     # Cross-platform library to get various kind of CPU information such as model name
     "py-cpuinfo",
@@ -88,6 +87,8 @@ dev = [
     "matplotlib>=3.7.0",
     # Used internally by 'VideoFileWriter'
     "av",
+    # Used for validating polar decomposition in unit tests
+    "scipy",
 ]
 docs = [
     # Note that currently sphinx 7 does not work, so we must use v6.2.1. Once fixed we can use a later version.
@@ -115,6 +116,8 @@ render = [
 usd = [
     # Used for parsing `.usd` mesh files
     "usd-core<25.11",
+    # import stubs to static code analysis
+    "types-usd==24.5.2",
 ]
 
 [project.scripts]
@@ -139,6 +142,21 @@ force-exclude = '''
     genesis/ext
 )/
 '''
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# Ignore the specific errors currently present in the codebase
+ignore = [
+    "F405", # undefined-local-with-import-star-usage
+    "F401", # unused-import
+    "F841", # unused-variable
+    "E741", # ambiguous-variable-name
+    "E402", # module-import-not-at-top-of-file
+    "F403", # undefined-local-with-import-star
+    "E712", # true-false-comparison
+]
 
 [tool.pytest.ini_options]
 addopts = [

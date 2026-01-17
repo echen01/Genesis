@@ -82,6 +82,10 @@ class RigidGeom(RBC):
         self._init_pos: np.ndarray = init_pos
         self._init_quat: np.ndarray = init_quat
 
+        # For heterogeneous simulation: which environments this geom is active in (None = all envs)
+        self.active_envs_mask: torch.Tensor | None = None
+        self.active_envs_idx: np.ndarray | None = None
+
         self._init_verts = mesh.verts
         self._init_faces = mesh.faces
         self._init_edges = mesh.get_unique_edges()
@@ -140,7 +144,7 @@ class RigidGeom(RBC):
                 with open(self._gsd_path, "rb") as file:
                     gsd_dict = pkl.load(file)
                 is_cached_loaded = True
-            except (EOFError, ModuleNotFoundError, pkl.UnpicklingError):
+            except (EOFError, ModuleNotFoundError, pkl.UnpicklingError, TypeError, MemoryError):
                 gs.logger.info("Ignoring corrupted cache.")
 
         if not is_cached_loaded:
@@ -349,7 +353,7 @@ class RigidGeom(RBC):
             gs.raise_exception("`friction` must be non-negative.")
         self._friction = friction
 
-        if self.is_built:
+        if self._solver.is_built:
             self._solver.set_geom_friction(friction, self._idx)
 
     # ------------------------------------------------------------------------------------
@@ -361,7 +365,7 @@ class RigidGeom(RBC):
         """
         Get the position of the geom in world frame.
         """
-        tensor = ti_to_torch(self._solver.geoms_state.pos, envs_idx, self._idx, transpose=True, copy=True)
+        tensor = ti_to_torch(self._solver.geoms_state.pos, envs_idx, self._idx, transpose=True, copy=True)[..., 0, :]
         return tensor[0] if self._solver.n_envs == 0 else tensor
 
     @gs.assert_built
@@ -369,7 +373,7 @@ class RigidGeom(RBC):
         """
         Get the quaternion of the geom in world frame.
         """
-        tensor = ti_to_torch(self._solver.geoms_state.quat, envs_idx, self._idx, transpose=True, copy=True)
+        tensor = ti_to_torch(self._solver.geoms_state.quat, envs_idx, self._idx, transpose=True, copy=True)[..., 0, :]
         return tensor[0] if self._solver.n_envs == 0 else tensor
 
     @gs.assert_built
@@ -400,7 +404,7 @@ class RigidGeom(RBC):
         """
         Set the solver parameters of this geometry.
         """
-        if self.is_built:
+        if self._solver.is_built:
             self._solver.set_sol_params(sol_params, geoms_idx=self._idx, envs_idx=None)
         else:
             self._sol_params = sol_params
@@ -410,7 +414,7 @@ class RigidGeom(RBC):
         """
         Get the solver parameters of this geometry.
         """
-        if self.is_built:
+        if self._solver.is_built:
             return self._solver.get_sol_params(geoms_idx=self._idx, envs_idx=None)[0]
         return self._sol_params
 
@@ -848,6 +852,10 @@ class RigidVisGeom(RBC):
         self._init_pos = init_pos
         self._init_quat = init_quat
 
+        # For heterogeneous simulation: which environments this vgeom is active in (None = all envs)
+        self.active_envs_mask: torch.Tensor | None = None
+        self.active_envs_idx: np.ndarray | None = None
+
         self._init_vverts = vmesh.verts
         self._init_vfaces = vmesh.faces
         self._init_vnormals = vmesh.normals
@@ -874,7 +882,7 @@ class RigidVisGeom(RBC):
         """
         Get the position of the geom in world frame.
         """
-        tensor = ti_to_torch(self._solver.vgeoms_state.pos, envs_idx, self._idx, transpose=True, copy=True)
+        tensor = ti_to_torch(self._solver.vgeoms_state.pos, envs_idx, self._idx, transpose=True, copy=True)[..., 0, :]
         return tensor[0] if self._solver.n_envs == 0 else tensor
 
     @gs.assert_built
@@ -882,7 +890,7 @@ class RigidVisGeom(RBC):
         """
         Get the quaternion of the geom in world frame.
         """
-        tensor = ti_to_torch(self._solver.vgeoms_state.quat, envs_idx, self._idx, transpose=True, copy=True)
+        tensor = ti_to_torch(self._solver.vgeoms_state.quat, envs_idx, self._idx, transpose=True, copy=True)[..., 0, :]
         return tensor[0] if self._solver.n_envs == 0 else tensor
 
     @gs.assert_built
