@@ -496,7 +496,7 @@ class ParticleEntity(Entity):
 
     @assert_active
     def _set_particles_target_state(self, key, name, element_shape, dtype, tensor, envs_idx=None):
-        if self.sim.requires_grad and self.sim.cur_t > 0.0:
+        if self.sim.requires_grad and self.sim.cur_t > 0.0 and name != "actuation" and name != "velocity":
             gs.logger.warning(
                 f"Manually setting particle '{name}'. This is not recommended because it breaks gradient flow."
             )
@@ -521,7 +521,7 @@ class ParticleEntity(Entity):
         if poss.ndim == 1 or (poss.ndim == 2 and poss.shape[0] != self._n_particles):
             poss = self._init_particles_offset + poss[..., None, :]
 
-        self._set_particles_target_state("pos", "position", (3,), gs.tc_float, poss, envs_idx)
+        self._set_p#articles_target_state("pos", "position", (3,), gs.tc_float, poss, envs_idx)
 
     @gs.assert_built
     def set_particles_pos(self, poss, particles_idx_local=None, envs_idx=None):
